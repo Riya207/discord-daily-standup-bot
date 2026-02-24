@@ -1,32 +1,26 @@
 const { Client, GatewayIntentBits } = require("discord.js");
-const cron = require("node-cron");
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+    GatewayIntentBits.DirectMessages,
+  ],
+  partials: ["CHANNEL"],
 });
 
-const CHANNEL_ID = process.env.CHANNEL_ID;
+// 👇 PUT *YOUR* USER ID HERE
+const TEST_USER_ID = "1105519295049498766";
 
-client.once("ready", () => {
-  console.log(`Logged in as ${client.user.tag}`);
+client.once("ready", async () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
-  cron.schedule(
-    "0 10 * * *",
-    async () => {
-      const channel = await client.channels.fetch(CHANNEL_ID);
-      channel.send(
-        "🌅 **Daily Standup**\n\n" +
-        "1️⃣ What did you work on yesterday?\n" +
-        "2️⃣ What will you work on today?\n" +
-        "3️⃣ Any blockers?"
-      );
-    },
-    { timezone: "Asia/Kathmandu" }
-  );
+  try {
+    const user = await client.users.fetch(TEST_USER_ID);
+    await user.send("👋 Hello Riya! Daily Standup Bot is working correctly.");
+    console.log("✅ Test DM sent successfully");
+  } catch (err) {
+    console.error("❌ DM failed:", err);
+  }
 });
 
 client.login(process.env.BOT_TOKEN);
