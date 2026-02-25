@@ -1,130 +1,121 @@
-const {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
-} = require("discord.js");
+const { Client, GatewayIntentBits } = require("discord.js");
 const cron = require("node-cron");
 
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,
     GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.MessageContent
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Channel]
 });
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const GUILD_ID = process.env.GUILD_ID;
 const CHANNEL_ID = process.env.CHANNEL_ID;
-const EMPLOYEE_ROLE_ID = process.env.EMPLOYEE_ROLE_ID;
 
-const submissions = new Map(); // userId → true
+// ---- In-memory daily tracking ----
+let standupStatus = {}; // { userId: { step, answers, submitted } }
 
-// ---------- Standup Flow ----------
-async function startStandup(user) {
-  await user.send(
-    "👋 **Hello! I hope you are working well. Keep the momentum going.**\n\n" +
-    "**Please answer the following questions:**"
-  );
-
-  const questions = [
-    "1️⃣ What did you work on yesterday?",
-    "2️⃣ What will you work on today?",
-    "3️⃣ Any blockers?"
-  ];
-
-  const answers = [];
-
-  for (const q of questions) {
-    await user.send(q);
-    const collected = await user.dmChannel.awaitMessages({
-      max: 1,
-      time: 15 * 60 * 1000
-    });
-
-    if (!collected.size) {
-      await user.send("⏰ Time expired. Please inform your lead.");
-      return;
-    }
-
-    answers.push(collected.first().content);
-  }
-
-  submissions.set(user.id, true);
-
-  const channel = await client.channels.fetch(CHANNEL_ID);
-  channel.send(
-    `📝 **Daily Standup — ${user.username}**\n\n` +
-    `**Previous work day progress**\n${answers[0]}\n\n` +
-    `**Plans for today**\n${answers[1]}\n\n` +
-    `**Blockers**\n${answers[2]}`
-  );
-
-  await user.send("✅ Thank you! Your daily standup has been submitted.");
+function resetDailyStandup() {
+  standupStatus = {};
+  console.log("🔄 Daily standup reset");
 }
 
-// ---------- Bot Ready ----------
 client.once("ready", async () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  const guild = await client.guilds.fetch(GUILD_ID);
+  console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // 11:00 AM — Start standup
-  cron.schedule("0 11 * * *", async () => {
-    submissions.clear();
-    const members = await guild.members.fetch();
+  // 🕚 11:00 AM — Send standup DM
+  cron.schedule(
+    "0 11 * * *",
+    async () => {
+      resetDailyStandup();
 
-    members.forEach(member => {
-      if (!member.user.bot && member.roles.cache.has(EMPLOYEE_ROLE_ID)) {
-        startStandup(member.user);
-      }
-    });
-  }, { timezone: "Asia/Kathmandu" });
+      const guilds = client.guilds.cache.values();
 
-  // 8:00 PM — Reminder with CTA
-  cron.schedule("0 20 * * *", async () => {
-    const members = await guild.members.fetch();
+      for (const guild of guilds) {
+        const members = await guild.members.fetch();
 
-    for (const member of members.values()) {
-      if (
-        !member.user.bot &&
-        member.roles.cache.has(EMPLOYEE_ROLE_ID) &&
-        !submissions.has(member.id)
-      ) {
-        const button = new ButtonBuilder()
-          .setCustomId("fill_standup")
-          .setLabel("📝 Fill Daily Standup")
-          .setStyle(ButtonStyle.Primary);
+        members.forEach(async (member) => {
+          if (member.user.bot) return;
 
-        const row = new ActionRowBuilder().addComponents(button);
+          standupStatus[member.id] = {
+            step: 1,
+            answers: {},
+            submitted: false,
+          };
 
-        await member.user.send({
-          content:
-            "⚠️ **Reminder:** You did not submit your daily standup today.\n\n" +
-            "Click below to submit now:",
-          components: [row]
+          try {
+            await member.send(
+              "👋 **Hello! I hope you are working well. Keep the momentum going.**\n\n" +
+              "**Please answer the following questions (reply one by one):**\n\n" +
+              "1️⃣ What did you work on yesterday?"
+            );
+          } catch (err) {
+            console.log(`❌ DM failed for ${member.user.tag}`);
+          }
         });
       }
-    }
-  }, { timezone: "Asia/Kathmandu" });
+    },
+    { timezone: "Asia/Kathmandu" }
+  );
+
+  // ⏰ 8:00 PM — Reminder if not submitted
+  cron.schedule(
+    "0 20 * * *",
+    async () => {
+      for (const userId in standupStatus) {
+        const status = standupStatus[userId];
+
+        if (!status.submitted) {
+          try {
+            const user = await client.users.fetch(userId);
+            await user.send(
+              "⚠️ **Reminder:** You did not submit your daily standup today.\n\n" +
+              "Please reply to complete your standup or inform your lead."
+            );
+          } catch {}
+        }
+      }
+    },
+    { timezone: "Asia/Kathmandu" }
+  );
 });
 
-// ---------- Button Interaction ----------
-client.on("interactionCreate", async interaction => {
-  if (!interaction.isButton()) return;
+// ---- Handle DM replies ----
+client.on("messageCreate", async (message) => {
+  if (message.guild) return;
+  if (message.author.bot) return;
 
-  if (interaction.customId === "fill_standup") {
-    await interaction.reply({
-      content: "✅ Starting your daily standup now…",
-      ephemeral: true
-    });
+  const userId = message.author.id;
+  const status = standupStatus[userId];
+  if (!status || status.submitted) return;
 
-    startStandup(interaction.user);
+  if (status.step === 1) {
+    status.answers.yesterday = message.content;
+    status.step = 2;
+    return message.reply("2️⃣ What will you work on today?");
+  }
+
+  if (status.step === 2) {
+    status.answers.today = message.content;
+    status.step = 3;
+    return message.reply("3️⃣ Any blockers?");
+  }
+
+  if (status.step === 3) {
+    status.answers.blockers = message.content;
+    status.submitted = true;
+
+    const channel = await client.channels.fetch(CHANNEL_ID);
+
+    await channel.send(
+      `📝 **Daily Standup — ${message.author.username}**\n\n` +
+      `**Previous work day progress**\n${status.answers.yesterday}\n\n` +
+      `**Plans for today**\n${status.answers.today}\n\n` +
+      `**Blockers (if any)**\n${status.answers.blockers}`
+    );
+
+    return message.reply("✅ **Thank you! Your daily standup has been submitted.**");
   }
 });
 
-client.login(BOT_TOKEN);
+client.login(process.env.BOT_TOKEN);
