@@ -20,6 +20,24 @@ function resetDailyStandup() {
   console.log("🔄 Daily standup reset");
 }
 
+async function sendDailyStandup() {
+  try {
+    const channel = await client.channels.fetch(CHANNEL_ID);
+
+    await channel.send(
+      "👋 **Hello! I hope you are working well. Keep the momentum going.**\n\n" +
+      "**Please answer the following:**\n\n" +
+      "1️⃣ What did you work on yesterday?\n" +
+      "2️⃣ What will you work on today?\n" +
+      "3️⃣ Any blockers?"
+    );
+
+    console.log("✅ Daily standup sent successfully");
+  } catch (error) {
+    console.error("❌ Failed to send daily standup:", error);
+  }
+}
+
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
