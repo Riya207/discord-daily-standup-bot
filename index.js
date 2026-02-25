@@ -23,6 +23,13 @@ function resetDailyStandup() {
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
+  // 🔁 ONE-TIME MANUAL RESEND (TODAY ONLY)
+  if (process.env.RESEND_TODAY === "true") {
+    console.log("⚠️ RESEND_TODAY enabled — sending standup once");
+
+    resetDailyStandup();
+    await sendDailyStandup(); // reuse the same logic as 11:00 AM
+  }
   // 🕚 11:00 AM — Send standup DM
   cron.schedule(
     "0 11 * * *",
