@@ -1,0 +1,4 @@
+node_modules/
+.env
+standup-state.json
+.DS_Store

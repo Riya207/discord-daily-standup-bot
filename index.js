@@ -1,5 +1,17 @@
-const { Client, GatewayIntentBits, Partials } = require("discord.js");
+require("dotenv").config();
+const { 
+  Client, 
+  GatewayIntentBits, 
+  Partials, 
+  ActionRowBuilder, 
+  ButtonBuilder, 
+  ButtonStyle 
+} = require("discord.js");
 const cron = require("node-cron");
+const fs = require("fs");
+const path = require("path");
+
+const STATE_FILE = path.join(__dirname, "standup-state.json");
 
 // ===============================
 // CLIENT SETUP
@@ -52,7 +64,8 @@ const HOLIDAYS = [
 // HELPERS
 // ===============================
 function getMMDD(offset = 0) {
-  const d = new Date();
+  // Use Asia/Kathmandu time consistently
+  const d = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }));
   d.setDate(d.getDate() + offset);
   return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
@@ -62,11 +75,50 @@ function isTodayHoliday() {
   return HOLIDAYS.some(h => h.date === today);
 }
 
-// ---- In-memory daily tracking ----
-let standupStatus = {}; // { userId: { step, answers, submitted } }
+function isSaturday() {
+  const d = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }));
+  return d.getDay() === 6; // 6 is Saturday
+}
+
+function isPastCutoff() {
+  const cutoff = "23:45"; // Hardcoded cut-off time (11:45 PM Kathmandu)
+  const [cutoffHour, cutoffMinute] = cutoff.split(":").map(Number);
+  
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }));
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+
+  if (currentHour > cutoffHour) return true;
+  if (currentHour === cutoffHour && currentMinute >= cutoffMinute) return true;
+  return false;
+}
+
+// ---- Persistent daily tracking ----
+let standupStatus = loadState();
+
+function loadState() {
+  if (fs.existsSync(STATE_FILE)) {
+    try {
+      return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    } catch (e) {
+      console.error("❌ Error loading state:", e);
+      return {};
+    }
+  }
+  return {};
+}
+
+function saveState() {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify(standupStatus, null, 2));
+  } catch (e) {
+    console.error("❌ Error saving state:", e);
+  }
+}
 
 function resetDailyStandup() {
   standupStatus = {};
+  saveState();
   console.log("🔄 Daily standup reset");
 }
 
@@ -75,18 +127,33 @@ function resetDailyStandup() {
 // ===============================
 async function sendDailyStandupDM() {
   const guilds = client.guilds.cache.values();
+  const processedUsers = new Set(); // To prevent duplicate DMs across guilds
 
   for (const guild of guilds) {
-    const members = await guild.members.fetch();
+    let members;
+    try {
+      members = await guild.members.fetch();
+    } catch (e) {
+      console.error(`❌ Failed to fetch members for guild: ${guild.name}`, e);
+      continue;
+    }
 
     for (const member of members.values()) {
-      if (member.user.bot) continue;
+      if (member.user.bot || processedUsers.has(member.id)) continue;
+      processedUsers.add(member.id);
 
-      standupStatus[member.id] = {
-        step: 1,
-        answers: {},
-        submitted: false,
-      };
+      // Initialize status only if not already in a standup session for today
+      if (!standupStatus[member.id]) {
+        standupStatus[member.id] = {
+          step: 1,
+          answers: {},
+          submitted: false,
+          promptSent: false, // Track if we've sent the initial prompt
+        };
+      } else if (standupStatus[member.id].submitted || standupStatus[member.id].promptSent) {
+        // If they already submitted or already received the prompt, skip them
+        continue;
+      }
 
       try {
         await member.send(
@@ -94,11 +161,13 @@ async function sendDailyStandupDM() {
           "**Please answer the following questions (reply one by one):**\n\n" +
           "1️⃣ What did you work on yesterday?"
         );
+        standupStatus[member.id].promptSent = true;
       } catch {
-        console.log(`❌ DM failed for ${member.user.tag}`);
+        console.log(`❌ DM failed for ${member.user.tag} (probably DMs disabled)`);
       }
     }
   }
+  saveState();
 }
 
 // ===============================
@@ -107,18 +176,22 @@ async function sendDailyStandupDM() {
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 
-  // 🔁 Manual resend (TODAY ONLY, respects holidays)
-  if (process.env.RESEND_TODAY === "true" && !isTodayHoliday()) {
-    await sendDailyStandupDM();
-    console.log("⚠️ Standup resent manually. Disable RESEND_TODAY now.");
+  // 🔁 Manual resend (TODAY ONLY)
+  if (process.env.RESEND_TODAY === "true") {
+    if (isTodayHoliday() || isSaturday()) {
+      console.log("🏖 Holiday or Saturday today — Standup skipped even for manual resend.");
+    } else {
+      await sendDailyStandupDM();
+      console.log("⚠️ Standup resent manually. Disable RESEND_TODAY now.");
+    }
   }
 
-  // 🕚 11:00 AM — Daily standup (SKIPPED on holidays)
+  // 🕚 11:00 AM — Daily standup (SKIPPED on holidays/Saturdays)
   cron.schedule(
     "0 11 * * *",
     async () => {
-      if (isTodayHoliday()) {
-        console.log("🏖 Holiday today — standup skipped");
+      if (isTodayHoliday() || isSaturday()) {
+        console.log("🏖 Holiday or Saturday today — Standup skipped.");
         return;
       }
 
@@ -180,31 +253,100 @@ client.on("messageCreate", async (message) => {
   const status = standupStatus[message.author.id];
   if (!status || status.submitted) return;
 
+  // Max message length to prevent Discord API errors
+  const userMessage = message.content.slice(0, 1500);
+
   if (status.step === 1) {
-    status.answers.yesterday = message.content;
+    status.answers.yesterday = userMessage;
     status.step = 2;
+    saveState();
     return message.reply("2️⃣ What will you work on today?");
   }
 
   if (status.step === 2) {
-    status.answers.today = message.content;
+    status.answers.today = userMessage;
     status.step = 3;
+    saveState();
     return message.reply("3️⃣ Any blockers?");
   }
 
   if (status.step === 3) {
-    status.answers.blockers = message.content;
-    status.submitted = true;
+    status.answers.blockers = userMessage;
+    status.step = 4; // Confirmation step
+    saveState();
 
-    const channel = await client.channels.fetch(CHANNEL_ID);
-    await channel.send(
-      `📝 **Daily Standup — ${message.author.username}**\n\n` +
-      `**Previous work day progress**\n${status.answers.yesterday}\n\n` +
-      `**Plans for today**\n${status.answers.today}\n\n` +
-      `**Blockers (if any)**\n${status.answers.blockers}`
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId("confirm_standup")
+        .setLabel("✅ Confirm and Submit")
+        .setStyle(ButtonStyle.Success),
+      new ButtonBuilder()
+        .setCustomId("edit_standup")
+        .setLabel("✏️ Edit All")
+        .setStyle(ButtonStyle.Secondary)
     );
 
-    return message.reply("✅ **Thank you! Your daily standup has been submitted.**");
+    const summary = 
+      `📝 **Review your Daily Standup**\n\n` +
+      `**1️⃣ Yesterday:**\n${status.answers.yesterday}\n\n` +
+      `**2️⃣ Today:**\n${status.answers.today}\n\n` +
+      `**3️⃣ Blockers:**\n${status.answers.blockers}\n\n` +
+      `*Click a button below to proceed.*`;
+
+    return message.reply({ content: summary, components: [row] });
+  }
+});
+
+// ===============================
+// HANDLE BUTTON INTERACTIONS
+// ===============================
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isButton()) return;
+
+  const status = standupStatus[interaction.user.id];
+  if (!status || status.submitted || status.step !== 4) {
+    return interaction.reply({ content: "⚠️ This session has expired or already been submitted.", ephemeral: true });
+  }
+
+  if (interaction.customId === "edit_standup") {
+    status.step = 1;
+    status.answers = {};
+    saveState();
+    await interaction.update({ content: "🔄 **Restarting your standup...**", components: [] });
+    return interaction.followUp("1️⃣ What did you work on yesterday?");
+  }
+
+  if (interaction.customId === "confirm_standup") {
+    try {
+      const channel = await client.channels.fetch(CHANNEL_ID);
+      if (!channel) throw new Error("Could not find the standup channel.");
+
+      const isLate = isPastCutoff();
+      const header = isLate ? `⏰ **LATE SUBMISSION — ${interaction.user.username}**` : `📝 **Daily Standup — ${interaction.user.username}**`;
+
+      const fullMessage =
+        `${header}\n\n` +
+        `**Previous work day progress**\n${status.answers.yesterday}\n\n` +
+        `**Plans for today**\n${status.answers.today}\n\n` +
+        `**Blockers (if any)**\n${status.answers.blockers}`;
+
+      // Final check for Discord limit
+      await channel.send(fullMessage.slice(0, 1999));
+
+      status.submitted = true;
+      saveState();
+
+      return interaction.update({
+        content: "✅ **Thank you! Your daily standup has been submitted to the team channel.**",
+        components: []
+      });
+    } catch (e) {
+      console.error("❌ Failed to send standup to channel:", e);
+      return interaction.reply({ 
+        content: "⚠️ **Error:** I couldn't post your standup to the team channel. Please contact an admin.",
+        ephemeral: true 
+      });
+    }
   }
 });
 
