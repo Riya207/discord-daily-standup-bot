@@ -10,6 +10,7 @@ const {
 const cron = require("node-cron");
 const fs = require("fs");
 const path = require("path");
+const express = require("express");
 
 const STATE_FILE = path.join(__dirname, "standup-state.json");
 
@@ -351,3 +352,17 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 client.login(process.env.BOT_TOKEN);
+
+// ===============================
+// KEEP-ALIVE SERVER (For Render Free Tier)
+// ===============================
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("🚀 Daily Standup Bot is online and healthy!");
+});
+
+app.listen(PORT, () => {
+  console.log(`📡 Keep-alive server listening on port ${PORT}`);
+});
