@@ -188,23 +188,6 @@ client.once("ready", async () => {
     }
   }
 
-  // 📝 One-off "Force Start" for a specific user ID (1365158777640190163)
-  try {
-    const targetId = "1365158777640190163";
-    // Check if they already submitted or haven't started
-    if (!standupStatus[targetId] || !standupStatus[targetId].submitted) {
-      const user = await client.users.fetch(targetId);
-      if (user) {
-        await user.send("👋 **Hello! I'm starting your standup for you.**\n\n1️⃣ What did you work on yesterday?");
-        standupStatus[targetId] = { step: 1, answers: {}, submitted: false, promptSent: true };
-        saveState();
-        console.log(`✅ One-off DM sent to ${targetId}`);
-      }
-    }
-  } catch (e) {
-    console.error(`❌ Failed one-off DM to 1365158777640190163`);
-  }
-
   // 🕚 11:00 AM — Daily standup (SKIPPED on holidays/Saturdays)
   cron.schedule(
     "0 11 * * *",
