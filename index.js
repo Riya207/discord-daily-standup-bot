@@ -363,6 +363,23 @@ client.on("interactionCreate", async (interaction) => {
 
       const embeds = [embed1, embed2, embed3];
 
+      // 🕵️‍♂️ Auto-Discovery Fallback: If memory is empty (after restart), search the channel for a previous report
+      if (!status.reportMessageId) {
+        try {
+          const fetchedMessages = await channel.messages.fetch({ limit: 50 });
+          const previousReport = fetchedMessages.find(m => 
+            m.author.id === client.user.id && 
+            m.embeds.length > 0 && 
+            m.embeds[0].author?.name === interaction.user.username
+          );
+          if (previousReport) {
+            status.reportMessageId = previousReport.id;
+          }
+        } catch (err) {
+          console.error("❌ Error auto-discovering previous report:", err);
+        }
+      }
+
       // If a message was already posted today, edit it. Otherwise, send a new one.
       if (status.reportMessageId) {
         try {
