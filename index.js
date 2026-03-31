@@ -5,7 +5,8 @@ const {
   Partials, 
   ActionRowBuilder, 
   ButtonBuilder, 
-  ButtonStyle 
+  ButtonStyle,
+  EmbedBuilder
 } = require("discord.js");
 const cron = require("node-cron");
 const fs = require("fs");
@@ -252,7 +253,18 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const status = standupStatus[message.author.id];
-  if (!status || status.submitted) return;
+  if (!status) return;
+
+  // 📝 Handle '/edit' command (restarts standup even if submitted)
+  if (message.content.toLowerCase().trim() === "/edit") {
+    status.step = 1;
+    status.answers = {};
+    status.submitted = false; // Allow re-submission
+    saveState();
+    return message.reply("🔄 **Restarting your standup...**\n\n1️⃣ What did you work on yesterday?");
+  }
+
+  if (status.submitted) return;
 
   // Max message length to prevent Discord API errors
   const userMessage = message.content.slice(0, 1500);
@@ -323,22 +335,41 @@ client.on("interactionCreate", async (interaction) => {
       if (!channel) throw new Error("Could not find the standup channel.");
 
       const isLate = isPastCutoff();
-      const header = isLate ? `⏰ **LATE SUBMISSION — ${interaction.user.username}**` : `📝 **Daily Standup — ${interaction.user.username}**`;
+      
+      const embed = new EmbedBuilder()
+        .setColor(isLate ? "#e74c3c" : "#3498db") // Red if late, Blue if normal (matches screenshot)
+        .setAuthor({ 
+          name: interaction.user.username, 
+          iconURL: interaction.user.displayAvatarURL() 
+        })
+        .setTitle("Here is an update for Daily Standup check-in:")
+        .addFields(
+          { name: "Previous work day progress", value: status.answers.yesterday },
+          { name: "Plans for today", value: status.answers.today },
+          { name: "Blockers (if any)", value: status.answers.blockers }
+        )
+        .setTimestamp();
 
-      const fullMessage =
-        `${header}\n\n` +
-        `**Previous work day progress**\n${status.answers.yesterday}\n\n` +
-        `**Plans for today**\n${status.answers.today}\n\n` +
-        `**Blockers (if any)**\n${status.answers.blockers}`;
-
-      // Final check for Discord limit
-      await channel.send(fullMessage.slice(0, 1999));
+      // If a message was already posted today, edit it. Otherwise, send a new one.
+      if (status.reportMessageId) {
+        try {
+          const oldMessage = await channel.messages.fetch(status.reportMessageId);
+          await oldMessage.edit({ embeds: [embed] });
+        } catch (e) {
+          // If the message was deleted, just send a new one
+          const sentMessage = await channel.send({ embeds: [embed] });
+          status.reportMessageId = sentMessage.id;
+        }
+      } else {
+        const sentMessage = await channel.send({ embeds: [embed] });
+        status.reportMessageId = sentMessage.id;
+      }
 
       status.submitted = true;
       saveState();
 
       return interaction.update({
-        content: "✅ **Thank you! Your daily standup has been submitted to the team channel.**",
+        content: "✅ **Thank you! Your daily standup has been submitted to the team channel.**\n\n*If you missed anything, type `/edit` to resubmit and update your report.*",
         components: []
       });
     } catch (e) {
