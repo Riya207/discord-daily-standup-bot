@@ -334,6 +334,10 @@ client.on("interactionCreate", async (interaction) => {
 
   if (interaction.customId === "confirm_standup") {
     try {
+      // ⏳ Defer the update immediately to prevent "Interaction timed out" 
+      // while we perform the async auto-discovery search
+      await interaction.deferUpdate();
+
       const channel = await client.channels.fetch(CHANNEL_ID);
       if (!channel) throw new Error("Could not find the standup channel.");
 
@@ -398,7 +402,8 @@ client.on("interactionCreate", async (interaction) => {
       status.submitted = true;
       saveState();
 
-      return interaction.update({
+      // Use editReply because we deferred earlier
+      return interaction.editReply({
         content: "✅ **Thank you! Your daily standup has been submitted to the team channel.**\n\n*If you missed anything, type `/edit` to resubmit and update your report.*",
         components: []
       });
