@@ -335,33 +335,43 @@ client.on("interactionCreate", async (interaction) => {
       if (!channel) throw new Error("Could not find the standup channel.");
 
       const isLate = isPastCutoff();
+      const color = isLate ? "#e74c3c" : "#3498db";
       
-      const embed = new EmbedBuilder()
-        .setColor(isLate ? "#e74c3c" : "#3498db") // Red if late, Blue if normal (matches screenshot)
+      const content = "Here is an update for **Daily Standup** check-in:";
+      
+      const embed1 = new EmbedBuilder()
+        .setColor(color)
         .setAuthor({ 
           name: interaction.user.username, 
           iconURL: interaction.user.displayAvatarURL() 
         })
-        .setTitle("Here is an update for Daily Standup check-in:")
-        .addFields(
-          { name: "Previous work day progress", value: status.answers.yesterday },
-          { name: "Plans for today", value: status.answers.today },
-          { name: "Blockers (if any)", value: status.answers.blockers }
-        )
-        .setTimestamp();
+        .setTitle("Previous work day progress")
+        .setDescription(status.answers.yesterday);
+
+      const embed2 = new EmbedBuilder()
+        .setColor(color)
+        .setTitle("Plans for today")
+        .setDescription(status.answers.today);
+
+      const embed3 = new EmbedBuilder()
+        .setColor(color)
+        .setTitle("Blockers (if any)")
+        .setDescription(status.answers.blockers || "*No blockers reported*");
+
+      const embeds = [embed1, embed2, embed3];
 
       // If a message was already posted today, edit it. Otherwise, send a new one.
       if (status.reportMessageId) {
         try {
           const oldMessage = await channel.messages.fetch(status.reportMessageId);
-          await oldMessage.edit({ embeds: [embed] });
+          await oldMessage.edit({ content, embeds });
         } catch (e) {
           // If the message was deleted, just send a new one
-          const sentMessage = await channel.send({ embeds: [embed] });
+          const sentMessage = await channel.send({ content, embeds });
           status.reportMessageId = sentMessage.id;
         }
       } else {
-        const sentMessage = await channel.send({ embeds: [embed] });
+        const sentMessage = await channel.send({ content, embeds });
         status.reportMessageId = sentMessage.id;
       }
 
