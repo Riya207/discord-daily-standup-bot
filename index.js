@@ -266,8 +266,25 @@ client.on("messageCreate", async (message) => {
     return message.reply("🔄 **Restarting your standup...**\n\n1️⃣ What did you work on yesterday?");
   }
 
-  const status = standupStatus[message.author.id];
-  if (!status || status.submitted) return;
+  let status = standupStatus[message.author.id];
+
+  // 🛠 AUTO-RECOVER: If the bot restarted and lost its memory, 
+  // initialize the user back to Step 1 so the conversation continues.
+  if (!status) {
+    status = {
+      step: 1,
+      answers: {},
+      submitted: false,
+      promptSent: true,
+    };
+    standupStatus[message.author.id] = status;
+    saveState();
+
+    // If they just messaged the bot, they are likely trying to answer the first question.
+    // We'll treat their message as the answer to Question 1.
+  }
+
+  if (status.submitted) return;
 
   // Max message length to prevent Discord API errors
   const userMessage = message.content.slice(0, 1500);
