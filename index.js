@@ -16,7 +16,7 @@ const express = require("express");
 const STATE_FILE = path.join(__dirname, "standup-state.json");
 
 // ===============================
-// CLIENT SETUP
+// CLIENT SETUPs
 // ===============================
 const client = new Client({
   intents: [
