@@ -188,6 +188,23 @@ client.once("ready", async () => {
     }
   }
 
+  // 📝 One-off "Force Start" for a specific user ID (1365158777640190163)
+  try {
+    const targetId = "1365158777640190163";
+    // Check if they already submitted or haven't started
+    if (!standupStatus[targetId] || !standupStatus[targetId].submitted) {
+      const user = await client.users.fetch(targetId);
+      if (user) {
+        await user.send("👋 **Hello! I'm starting your standup for you.**\n\n1️⃣ What did you work on yesterday?");
+        standupStatus[targetId] = { step: 1, answers: {}, submitted: false, promptSent: true };
+        saveState();
+        console.log(`✅ One-off DM sent to ${targetId}`);
+      }
+    }
+  } catch (e) {
+    console.error(`❌ Failed one-off DM to 1365158777640190163`);
+  }
+
   // 🕚 11:00 AM — Daily standup (SKIPPED on holidays/Saturdays)
   cron.schedule(
     "0 11 * * *",
@@ -252,19 +269,22 @@ client.on("messageCreate", async (message) => {
   if (message.guild) return;
   if (message.author.bot) return;
 
-  const status = standupStatus[message.author.id];
-  if (!status) return;
+  const userMessageContent = message.content.toLowerCase().trim();
 
-  // 📝 Handle '/edit' command (restarts standup even if submitted)
-  if (message.content.toLowerCase().trim() === "/edit") {
-    status.step = 1;
-    status.answers = {};
-    status.submitted = false; // Allow re-submission
+  // 📝 Handle '/edit' command (restarts or initializes standup even if state was lost)
+  if (userMessageContent === "/edit") {
+    standupStatus[message.author.id] = {
+      step: 1,
+      answers: {},
+      submitted: false,
+      promptSent: true
+    };
     saveState();
     return message.reply("🔄 **Restarting your standup...**\n\n1️⃣ What did you work on yesterday?");
   }
 
-  if (status.submitted) return;
+  const status = standupStatus[message.author.id];
+  if (!status || status.submitted) return;
 
   // Max message length to prevent Discord API errors
   const userMessage = message.content.slice(0, 1500);
