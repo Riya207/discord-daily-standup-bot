@@ -1,10 +1,10 @@
 require("dotenv").config();
-const { 
-  Client, 
-  GatewayIntentBits, 
-  Partials, 
-  ActionRowBuilder, 
-  ButtonBuilder, 
+const {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  ActionRowBuilder,
+  ButtonBuilder,
   ButtonStyle,
   EmbedBuilder
 } = require("discord.js");
@@ -16,7 +16,7 @@ const express = require("express");
 const STATE_FILE = path.join(__dirname, "standup-state.json");
 
 // ===============================
-// CLIENT SETUPs
+// CLIENT SETUP
 // ===============================
 const client = new Client({
   intents: [
@@ -26,7 +26,7 @@ const client = new Client({
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
   ],
-  partials: [Partials.Channel],
+  partials: [Partials.Channel, Partials.Message],
 });
 
 const CHANNEL_ID = process.env.CHANNEL_ID;               // Standup channel
@@ -85,7 +85,7 @@ function isSaturday() {
 function isPastCutoff() {
   const cutoff = "23:45"; // Hardcoded cut-off time (11:45 PM Kathmandu)
   const [cutoffHour, cutoffMinute] = cutoff.split(":").map(Number);
-  
+
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }));
   const currentHour = now.getHours();
   const currentMinute = now.getMinutes();
@@ -217,7 +217,7 @@ client.once("ready", async () => {
               "⚠️ **Reminder:** You have not submitted your daily standup.\n\n" +
               "Please complete it before **11:45 PM**."
             );
-          } catch {}
+          } catch { }
         }
       }
     },
@@ -251,6 +251,8 @@ client.once("ready", async () => {
 client.on("messageCreate", async (message) => {
   if (message.guild) return;
   if (message.author.bot) return;
+
+  console.log(`📩 DM Received from ${message.author.username}: "${message.content}"`);
 
   const userMessageContent = message.content.toLowerCase().trim();
 
@@ -319,7 +321,7 @@ client.on("messageCreate", async (message) => {
         .setStyle(ButtonStyle.Secondary)
     );
 
-    const summary = 
+    const summary =
       `📝 **Review your Daily Standup**\n\n` +
       `**1️⃣ Yesterday:**\n${status.answers.yesterday}\n\n` +
       `**2️⃣ Today:**\n${status.answers.today}\n\n` +
@@ -360,14 +362,14 @@ client.on("interactionCreate", async (interaction) => {
 
       const isLate = isPastCutoff();
       const color = isLate ? "#e74c3c" : "#3498db";
-      
+
       const content = "Here is an update for **Daily Standup** check-in:";
-      
+
       const embed1 = new EmbedBuilder()
         .setColor(color)
-        .setAuthor({ 
-          name: interaction.user.username, 
-          iconURL: interaction.user.displayAvatarURL() 
+        .setAuthor({
+          name: interaction.user.username,
+          iconURL: interaction.user.displayAvatarURL()
         })
         .setTitle("Previous work day progress")
         .setDescription(status.answers.yesterday);
@@ -388,9 +390,9 @@ client.on("interactionCreate", async (interaction) => {
       if (!status.reportMessageId) {
         try {
           const fetchedMessages = await channel.messages.fetch({ limit: 50 });
-          const previousReport = fetchedMessages.find(m => 
-            m.author.id === client.user.id && 
-            m.embeds.length > 0 && 
+          const previousReport = fetchedMessages.find(m =>
+            m.author.id === client.user.id &&
+            m.embeds.length > 0 &&
             m.embeds[0].author?.name === interaction.user.username
           );
           if (previousReport) {
@@ -426,9 +428,9 @@ client.on("interactionCreate", async (interaction) => {
       });
     } catch (e) {
       console.error("❌ Failed to send standup to channel:", e);
-      return interaction.reply({ 
+      return interaction.reply({
         content: "⚠️ **Error:** I couldn't post your standup to the team channel. Please contact an admin.",
-        ephemeral: true 
+        ephemeral: true
       });
     }
   }
