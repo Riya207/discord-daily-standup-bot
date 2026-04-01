@@ -164,8 +164,9 @@ async function sendDailyStandupDM() {
           "1️⃣ What did you work on yesterday?"
         );
         standupStatus[member.id].promptSent = true;
-      } catch {
-        console.log(`❌ DM failed for ${member.user.tag} (probably DMs disabled)`);
+        console.log(`📡 DM prompt sent to: ${member.user.tag}`);
+      } catch (err) {
+        console.log(`❌ DM failed for ${member.user.tag} (DMs might be disabled)`);
       }
     }
   }
@@ -193,12 +194,14 @@ client.once("ready", async () => {
     "0 11 * * *",
     async () => {
       if (isTodayHoliday() || isSaturday()) {
-        console.log("🏖 Holiday or Saturday today — Standup skipped.");
+        console.log("🏖 Today is a Holiday or Saturday — Skipping daily standup distribution.");
         return;
       }
-
+      
+      console.log("🕚 11:00 AM — Starting daily standup distribution...");
       resetDailyStandup();
       await sendDailyStandupDM();
+      console.log("✅ Daily standup distribution complete.");
     },
     { timezone: "Asia/Kathmandu" }
   );
@@ -208,7 +211,8 @@ client.once("ready", async () => {
     "0 20 * * *",
     async () => {
       if (isTodayHoliday()) return;
-
+      console.log("⏰ 8:00 PM — Sending reminders to users who haven't submitted...");
+      let reminderCount = 0;
       for (const userId in standupStatus) {
         if (!standupStatus[userId].submitted) {
           try {
@@ -217,9 +221,13 @@ client.once("ready", async () => {
               "⚠️ **Reminder:** You have not submitted your daily standup.\n\n" +
               "Please complete it before **11:45 PM**."
             );
-          } catch { }
+            reminderCount++;
+          } catch (err) {
+            console.log(`❌ Failed to send reminder to User ID ${userId}`);
+          }
         }
       }
+      console.log(`✅ Sent ${reminderCount} reminders.`);
     },
     { timezone: "Asia/Kathmandu" }
   );
@@ -295,6 +303,7 @@ client.on("messageCreate", async (message) => {
     status.answers.yesterday = userMessage;
     status.step = 2;
     saveState();
+    console.log(`📝 ${message.author.username} completed Step 1 (Yesterday)`);
     return message.reply("2️⃣ What will you work on today?");
   }
 
@@ -302,6 +311,7 @@ client.on("messageCreate", async (message) => {
     status.answers.today = userMessage;
     status.step = 3;
     saveState();
+    console.log(`📝 ${message.author.username} completed Step 2 (Today)`);
     return message.reply("3️⃣ Any blockers?");
   }
 
@@ -321,12 +331,13 @@ client.on("messageCreate", async (message) => {
         .setStyle(ButtonStyle.Secondary)
     );
 
-    const summary =
+    const summary = 
+      `🚨 **ACTION REQUIRED: NOT SUBMITTED YET!**\n\n` +
       `📝 **Review your Daily Standup**\n\n` +
       `**1️⃣ Yesterday:**\n${status.answers.yesterday}\n\n` +
       `**2️⃣ Today:**\n${status.answers.today}\n\n` +
       `**3️⃣ Blockers:**\n${status.answers.blockers}\n\n` +
-      `*Click a button below to proceed.*`;
+      `👉 **Please click the button below to post this to the team channel!**`;
 
     return message.reply({ content: summary, components: [row] });
   }
@@ -339,14 +350,19 @@ client.on("interactionCreate", async (interaction) => {
   if (!interaction.isButton()) return;
 
   const status = standupStatus[interaction.user.id];
+  
   if (!status || status.submitted || status.step !== 4) {
+    console.log(`⚠️ Button clicked but session expired/invalid for ${interaction.user.tag}`);
     return interaction.reply({ content: "⚠️ This session has expired or already been submitted.", ephemeral: true });
   }
+
+  console.log(`🔘 Button clicked: "${interaction.customId}" by ${interaction.user.tag}`);
 
   if (interaction.customId === "edit_standup") {
     status.step = 1;
     status.answers = {};
     saveState();
+    console.log(`✏️ ${interaction.user.tag} clicked "Edit All" - Restarting their standup.`);
     await interaction.update({ content: "🔄 **Restarting your standup...**", components: [] });
     return interaction.followUp("1️⃣ What did you work on yesterday?");
   }
@@ -388,6 +404,7 @@ client.on("interactionCreate", async (interaction) => {
 
       // 🕵️‍♂️ Auto-Discovery Fallback: If memory is empty (after restart), search the channel for a previous report
       if (!status.reportMessageId) {
+        console.log(`🕵️‍♂️ Auto-Discovery: Memory is empty for ${interaction.user.tag}. Searching channel history...`);
         try {
           const fetchedMessages = await channel.messages.fetch({ limit: 50 });
           const previousReport = fetchedMessages.find(m =>
@@ -396,30 +413,37 @@ client.on("interactionCreate", async (interaction) => {
             m.embeds[0].author?.name === interaction.user.username
           );
           if (previousReport) {
+            console.log(`🕵️‍♂️ Auto-Discovery SUCCESS: Found previous report (${previousReport.id}) for ${interaction.user.tag}`);
             status.reportMessageId = previousReport.id;
+          } else {
+            console.log(`🕵️‍♂️ Auto-Discovery: No previous report found for ${interaction.user.tag} in last 50 messages.`);
           }
         } catch (err) {
-          console.error("❌ Error auto-discovering previous report:", err);
+          console.error("❌ Error during Auto-Discovery search:", err);
         }
       }
 
       // If a message was already posted today, edit it. Otherwise, send a new one.
       if (status.reportMessageId) {
         try {
+          console.log(`📝 Updating existing report (${status.reportMessageId}) for ${interaction.user.tag}`);
           const oldMessage = await channel.messages.fetch(status.reportMessageId);
           await oldMessage.edit({ content, embeds });
         } catch (e) {
-          // If the message was deleted, just send a new one
+          console.log(`⚠️ Previous report (${status.reportMessageId}) could not be edited (maybe deleted). Sending new one.`);
           const sentMessage = await channel.send({ content, embeds });
           status.reportMessageId = sentMessage.id;
         }
       } else {
+        console.log(`📝 Sending NEW report for ${interaction.user.tag}`);
         const sentMessage = await channel.send({ content, embeds });
         status.reportMessageId = sentMessage.id;
       }
 
       status.submitted = true;
       saveState();
+
+      console.log(`✅ Standup successfully SUBMITTED to channel for: ${interaction.user.tag}`);
 
       // Use editReply because we deferred earlier
       return interaction.editReply({
@@ -428,9 +452,9 @@ client.on("interactionCreate", async (interaction) => {
       });
     } catch (e) {
       console.error("❌ Failed to send standup to channel:", e);
-      return interaction.reply({
+      return interaction.editReply({
         content: "⚠️ **Error:** I couldn't post your standup to the team channel. Please contact an admin.",
-        ephemeral: true
+        components: []
       });
     }
   }
