@@ -305,20 +305,17 @@ client.on("messageCreate", async (message) => {
     saveState();
     console.log(`📝 ${message.author.username} completed Step 1 (Yesterday)`);
     return message.reply("2️⃣ What will you work on today?");
-  }
-
-  if (status.step === 2) {
+  } else if (status.step === 2) {
     status.answers.today = userMessage;
     status.step = 3;
     saveState();
     console.log(`📝 ${message.author.username} completed Step 2 (Today)`);
     return message.reply("3️⃣ Any blockers?");
-  }
-
-  if (status.step === 3) {
+  } else if (status.step === 3) {
     status.answers.blockers = userMessage;
     status.step = 4; // Confirmation step
     saveState();
+    console.log(`📝 ${message.author.username} completed Step 3 (Blockers)`);
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
