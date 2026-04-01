@@ -83,15 +83,17 @@ function isSaturday() {
 }
 
 function isPastCutoff() {
-  const cutoff = "23:45"; // Hardcoded cut-off time (11:45 PM Kathmandu)
-  const [cutoffHour, cutoffMinute] = cutoff.split(":").map(Number);
-
   const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }));
   const currentHour = now.getHours();
   const currentMinute = now.getMinutes();
 
-  if (currentHour > cutoffHour) return true;
-  if (currentHour === cutoffHour && currentMinute >= cutoffMinute) return true;
+  // 🔴 LATE: If it is after 11:45 PM (23:45)
+  if (currentHour === 23 && currentMinute >= 45) return true;
+
+  // 🔴 ALSO LATE: If it is after midnight (00:00) but before the 11:00 AM reset
+  if (currentHour < 11) return true;
+
+  // 🔵 ON-TIME: Anytime between the 11:00 AM reset and 11:45 PM
   return false;
 }
 
@@ -173,11 +175,10 @@ async function sendDailyStandupDM() {
   saveState();
 }
 
-// ===============================
-// BOT READY
-// ===============================
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  console.log(`📡 Connected to Standup Channel: ${CHANNEL_ID}`);
+  console.log(`📡 Connected to Holiday Channel: ${HOLIDAY_CHANNEL_ID}`);
 
   // 🔁 Manual resend (TODAY ONLY)
   if (process.env.RESEND_TODAY === "true") {
@@ -236,17 +237,23 @@ client.once("ready", async () => {
   cron.schedule(
     "0 17 * * *",
     async () => {
-      const tomorrow = getMMDD(1);
-      const channel = await client.channels.fetch(HOLIDAY_CHANNEL_ID);
+      try {
+        const tomorrow = getMMDD(1);
+        const channel = await client.channels.fetch(HOLIDAY_CHANNEL_ID);
+        if (!channel) return;
 
-      for (const holiday of HOLIDAYS) {
-        if (holiday.date === tomorrow) {
-          await channel.send(
-            `📣 **Holiday Notice**\n\n` +
-            `🗓 **Tomorrow is the holiday on the occasion of ${holiday.name}.**\n\n` +
-            holiday.message
-          );
+        for (const holiday of HOLIDAYS) {
+          if (holiday.date === tomorrow) {
+            await channel.send(
+              `📣 **Holiday Notice**\n\n` +
+              `🗓 **Tomorrow is the holiday on the occasion of ${holiday.name}.**\n\n` +
+              holiday.message
+            );
+            console.log(`📣 Holiday notice sent for ${holiday.name}`);
+          }
         }
+      } catch (err) {
+        console.error("❌ Failed to send holiday notice:", err);
       }
     },
     { timezone: "Asia/Kathmandu" }
@@ -289,12 +296,13 @@ client.on("messageCreate", async (message) => {
     };
     standupStatus[message.author.id] = status;
     saveState();
-
-    // If they just messaged the bot, they are likely trying to answer the first question.
-    // We'll treat their message as the answer to Question 1.
+    console.log(`🛠️ Auto-Recovery: Initialized new session for ${message.author.tag} after restart.`);
   }
 
-  if (status.submitted) return;
+  if (status.submitted) {
+    console.log(`📩 Ignoring message from ${message.author.tag} (Already submitted)`);
+    return;
+  }
 
   // Max message length to prevent Discord API errors
   const userMessage = message.content.slice(0, 1500);
@@ -373,6 +381,8 @@ client.on("interactionCreate", async (interaction) => {
       const channel = await client.channels.fetch(CHANNEL_ID);
       if (!channel) throw new Error("Could not find the standup channel.");
 
+      console.log(`📡 Submitting to channel: #${channel.name || "Private/Unknown"} (${channel.id})`);
+
       const isLate = isPastCutoff();
       const color = isLate ? "#e74c3c" : "#3498db";
 
@@ -401,19 +411,27 @@ client.on("interactionCreate", async (interaction) => {
 
       // 🕵️‍♂️ Auto-Discovery Fallback: If memory is empty (after restart), search the channel for a previous report
       if (!status.reportMessageId) {
-        console.log(`🕵️‍♂️ Auto-Discovery: Memory is empty for ${interaction.user.tag}. Searching channel history...`);
+        console.log(`🕵️‍♂️ Auto-Discovery: Memory is empty for ${interaction.user.tag}. Searching today's history...`);
         try {
+          const todayMMDD = getMMDD(0);
           const fetchedMessages = await channel.messages.fetch({ limit: 50 });
-          const previousReport = fetchedMessages.find(m =>
-            m.author.id === client.user.id &&
-            m.embeds.length > 0 &&
-            m.embeds[0].author?.name === interaction.user.username
-          );
+          const previousReport = fetchedMessages.find(m => {
+            const d = new Date(new Date(m.createdAt).toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }));
+            const msgMMDD = `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            
+            return (
+              m.author.id === client.user.id &&
+              m.embeds.length > 0 &&
+              m.embeds[0].author?.name === interaction.user.username &&
+              msgMMDD === todayMMDD // 🛡️ ONLY discover reports from TODAY
+            );
+          });
+
           if (previousReport) {
-            console.log(`🕵️‍♂️ Auto-Discovery SUCCESS: Found previous report (${previousReport.id}) for ${interaction.user.tag}`);
+            console.log(`🕵️‍♂️ Auto-Discovery SUCCESS: Found today's report (${previousReport.id}) for ${interaction.user.tag}`);
             status.reportMessageId = previousReport.id;
           } else {
-            console.log(`🕵️‍♂️ Auto-Discovery: No previous report found for ${interaction.user.tag} in last 50 messages.`);
+            console.log(`🕵️‍♂️ Auto-Discovery: No report found for ${interaction.user.tag} in today's channel history.`);
           }
         } catch (err) {
           console.error("❌ Error during Auto-Discovery search:", err);
