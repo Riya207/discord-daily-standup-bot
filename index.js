@@ -73,8 +73,23 @@ function getMMDD(offset = 0) {
 }
 
 function isTodayHoliday() {
-  const today = getMMDD(0);
+  // Use current standup cycle to determine if it's a holiday
+  const today = getStandupCycle();
   return HOLIDAYS.some(h => h.date === today);
+}
+
+function getStandupCycle(date = new Date()) {
+  // Use Asia/Kathmandu time consistently
+  const d = new Date(date.toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }));
+  const hours = d.getHours();
+  
+  const cycleDate = new Date(d);
+  // If before 11:00 AM, we are still in yesterday's standup cycle
+  if (hours < 11) {
+    cycleDate.setDate(cycleDate.getDate() - 1);
+  }
+  
+  return `${String(cycleDate.getMonth() + 1).padStart(2, "0")}-${String(cycleDate.getDate()).padStart(2, "0")}`;
 }
 
 function isSaturday() {
@@ -146,13 +161,15 @@ async function sendDailyStandupDM() {
       if (member.user.bot || processedUsers.has(member.id)) continue;
       processedUsers.add(member.id);
 
-      // Initialize status only if not already in a standup session for today
-      if (!standupStatus[member.id]) {
+      // Initialize status only if not already in a standup session for the current cycle
+      const currentCycle = getStandupCycle();
+      if (!standupStatus[member.id] || standupStatus[member.id].cycle !== currentCycle) {
         standupStatus[member.id] = {
           step: 1,
           answers: {},
           submitted: false,
-          promptSent: false, // Track if we've sent the initial prompt
+          promptSent: false,
+          cycle: currentCycle
         };
       } else if (standupStatus[member.id].submitted || standupStatus[member.id].promptSent) {
         // If they already submitted or already received the prompt, skip them
@@ -284,19 +301,21 @@ client.on("messageCreate", async (message) => {
   }
 
   let status = standupStatus[message.author.id];
+  const currentCycle = getStandupCycle();
 
   // 🛠 AUTO-RECOVER: If the bot restarted and lost its memory, 
   // initialize the user back to Step 1 so the conversation continues.
-  if (!status) {
+  if (!status || status.cycle !== currentCycle) {
     status = {
       step: 1,
       answers: {},
       submitted: false,
       promptSent: true,
+      cycle: currentCycle
     };
     standupStatus[message.author.id] = status;
     saveState();
-    console.log(`🛠️ Auto-Recovery: Initialized new session for ${message.author.tag} after restart.`);
+    console.log(`🛠️ Auto-Recovery: Initialized new session for ${message.author.tag} for cycle ${currentCycle}.`);
   }
 
   if (status.submitted) {
@@ -411,27 +430,26 @@ client.on("interactionCreate", async (interaction) => {
 
       // 🕵️‍♂️ Auto-Discovery Fallback: If memory is empty (after restart), search the channel for a previous report
       if (!status.reportMessageId) {
-        console.log(`🕵️‍♂️ Auto-Discovery: Memory is empty for ${interaction.user.tag}. Searching today's history...`);
+        console.log(`🕵️‍♂️ Auto-Discovery: No report ID in memory for ${interaction.user.tag}. Searching current cycle history...`);
         try {
-          const todayMMDD = getMMDD(0);
+          const currentCycle = getStandupCycle();
           const fetchedMessages = await channel.messages.fetch({ limit: 50 });
           const previousReport = fetchedMessages.find(m => {
-            const d = new Date(new Date(m.createdAt).toLocaleString("en-US", { timeZone: "Asia/Kathmandu" }));
-            const msgMMDD = `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            const msgCycle = getStandupCycle(m.createdAt);
             
             return (
               m.author.id === client.user.id &&
               m.embeds.length > 0 &&
               m.embeds[0].author?.name === interaction.user.username &&
-              msgMMDD === todayMMDD // 🛡️ ONLY discover reports from TODAY
+              msgCycle === currentCycle // 🛡️ ONLY discover reports from the SAME 11AM-11AM CYCLE
             );
           });
 
           if (previousReport) {
-            console.log(`🕵️‍♂️ Auto-Discovery SUCCESS: Found today's report (${previousReport.id}) for ${interaction.user.tag}`);
+            console.log(`🕵️‍♂️ Auto-Discovery SUCCESS: Found this cycle's report (${previousReport.id}) for ${interaction.user.tag}`);
             status.reportMessageId = previousReport.id;
           } else {
-            console.log(`🕵️‍♂️ Auto-Discovery: No report found for ${interaction.user.tag} in today's channel history.`);
+            console.log(`🕵️‍♂️ Auto-Discovery: No report found for ${interaction.user.tag} in this cycle's history.`);
           }
         } catch (err) {
           console.error("❌ Error during Auto-Discovery search:", err);
